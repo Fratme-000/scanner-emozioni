@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Face Scan & Lie Detector HUD - Secret Archive</title>
+    
+    <!-- Librerie MediaPipe via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: #080b10; color: #00f0ff; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-x: hidden; }
+        
+        header { width: 100%; max-width: 1100px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        h1 { color: #fff; text-shadow: 0 0 10px #00f0ff; text-transform: uppercase; letter-spacing: 2px; font-size: 1.4rem; }
+        
+        .btn-secret { background: rgba(255, 71, 87, 0.2); border: 1px solid #ff4757; color: #ff4757; padding: 8px 16px; font-weight: bold; border-radius: 20px; cursor: pointer; transition: 0.3s; }
+        .btn-secret:hover { background: #ff4757; color: #fff; box-shadow: 0 0 15px #ff4757; }
+
+        .container { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; max-width: 1100px; width: 100%; }
+
+        /* Area Video e Scanner HUD */
+        .viewport-box {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            background: #000;
+            border-radius: 12px;
+            border: 2px solid #1e293b;
+            overflow: hidden;
+            box-shadow: 0 0 25px rgba(0, 240, 255, 0.2);
+        }
+        video { display: none; }
+        canvas { width: 100%; height: 100%; transform: scaleX(-1); object-fit: cover; }
+
+        /* Angoli HUD e Linea Scansione */
+        .hud-corner { position: absolute; width: 25px; height: 25px; border-color: #ffd700; border-style: solid; pointer-events: none; z-index: 10; }
+        .top-left { top: 15px; left: 15px; border-width: 2px 0 0 2px; }
+        .top-right { top: 15px; right: 15px; border-width: 2px 2px 0 0; }
+        .bottom-left { bottom: 15px; left: 15px; border-width: 0 0 2px 2px; }
+        .bottom-right { bottom: 15px; right: 15px; border-width: 0 2px 2px 0; }
+
+        .scan-line {
+            position: absolute; top: 0; left: 0; width: 100%; height: 2px;
+            background: linear-gradient(90deg, transparent, #00f0ff, #fff, #00f0ff, transparent);
+            box-shadow: 0 0 10px #00f0ff; animation: scan 3s ease-in-out infinite;
+            pointer-events: none; z-index: 5;
+        }
+        @keyframes scan { 0% { top: 0%; } 50% { top: 100%; } 100% { top: 0%; } }
+
+        .rec-indicator {
+            position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+            background: rgba(255, 71, 87, 0.8); color: #fff; padding: 4px 12px;
+            border-radius: 12px; font-size: 0.75rem; font-weight: bold;
+            display: flex; align-items: center; gap: 6px; z-index: 12;
+        }
+        .rec-dot { width: 8px; height: 8px; background: #fff; border-radius: 50%; animation: blink 1s infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* Dashboard */
+        .dashboard {
+            flex: 1; min-width: 320px; background: rgba(15, 23, 42, 0.9);
+            border: 1px solid #1e293b; border-radius: 12px; padding: 20px;
+            display: flex; flex-direction: column; gap: 15px; backdrop-filter: blur(10px);
+        }
+        .status { padding: 6px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; text-align: center; background: #1e293b; color: #3fb950; border: 1px solid #334155; }
+        
+        .card { background: #090d16; border-left: 4px solid #00f0ff; padding: 12px; border-radius: 6px; border: 1px solid #1e293b; border-left-width: 4px; }
+        .card-title { font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; }
+        .card-value { font-size: 1.1rem; color: #fff; font-weight: bold; margin-top: 4px; line-height: 1.3; }
+
+        .bar-bg { width: 100%; height: 8px; background: #1e293b; border-radius: 4px; margin-top: 8px; overflow: hidden; }
+        .bar-fill { height: 100%; width: 0%; transition: width 0.3s ease, background-color 0.3s ease; }
+
+        /* Modal Pannello Segreto */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px);
+            display: none; justify-content: center; align-items: center; z-index: 100;
+        }
+        .modal-overlay.active { display: flex; }
+        
+        .secret-panel {
+            background: #0f172a; border: 1px solid #ff4757; border-radius: 16px;
+            width: 90%; max-width: 800px; max-height: 85vh; padding: 25px;
+            display: flex; flex-direction: column; gap: 20px; overflow-y: auto;
+            box-shadow: 0 0 40px rgba(255, 71, 87, 0.3);
+        }
+        .panel-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 15px; }
+        .panel-header h2 { color: #ff4757; font-size: 1.3rem; }
+        .close-btn { background: none; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer; }
+
+        .session-item { background: #090d16; border: 1px solid #1e293b; border-radius: 10px; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+        .session-info { display: flex; justify-content: space-between; font-size: 0.85rem; color: #94a3b8; border-bottom: 1px dashed #1e293b; padding-bottom: 8px; }
+        
+        video.saved-video { width: 100%; max-height: 250px; border-radius: 8px; background: #000; margin-top: 5px; }
+        
+        .log-box { background: #04060a; border: 1px solid #1e293b; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 0.75rem; color: #00f0ff; max-height: 100px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>AI Micro-Expression HUD</h1>
+        <button id="btn-open-secret" class="btn-secret">🔒 Pannello Segreto</button>
+    </header>
+
+    <div class="container">
+        <!-- Viewport Fotocamera -->
+        <div class="viewport-box">
+            <video id="webcam_input"></video>
+            <canvas id="output_canvas"></canvas>
+
+            <div class="hud-corner top-left"></div>
+            <div class="hud-corner top-right"></div>
+            <div class="hud-corner bottom-left"></div>
+            <div class="hud-corner bottom-right"></div>
+            <div class="scan-line"></div>
+
+            <div class="rec-indicator"><div class="rec-dot"></div> REC - REGISTRAZIONE SESSIONE</div>
+        </div>
+
+        <!-- Dashboard Statistiche -->
+        <div class="dashboard">
+            <div id="status-badge" class="status">Inizializzazione AI...</div>
+
+            <div class="card" style="border-left-color: #00f0ff;">
+                <div class="card-title">Analisi Pollinations AI</div>
+                <div id="ai-response" class="card-value">In attesa del viso...</div>
+            </div>
+
+            <div class="card" style="border-left-color: #2ed573;">
+                <div class="card-title">Indice di Verità (Lie Detector)</div>
+                <div id="truth-val" class="card-value">-- %</div>
+                <div class="bar-bg"><div id="truth-bar" class="bar-fill" style="background-color: #2ed573;"></div></div>
+            </div>
+
+            <div class="card" style="border-left-color: #ff4757;">
+                <div class="card-title">Livello di Attrazione / Interesse</div>
+                <div id="love-val" class="card-value">-- %</div>
+                <div class="bar-bg"><div id="love-bar" class="bar-fill" style="background-color: #ff4757;"></div></div>
+            </div>
+
+            <div class="card" style="border-left-color: #a371f7;">
+                <div class="card-title">Tensione Facciale Rilevata</div>
+                <div id="tension-val" class="card-value">0.0 Hz</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Pannello Segreto -->
+    <div id="secret-modal" class="modal-overlay">
+        <div class="secret-panel">
+            <div class="panel-header">
+                <h2>🔒 Archivio Segreto Sessioni Registrate</h2>
+                <button id="btn-close-secret" class="close-btn">&times;</button>
+            </div>
+            
+            <p style="font-size: 0.85rem; color: #94a3b8;">Tutti i video e le rilevazioni delle microespressioni vengono salvati automaticamente qui sotto durante ogni sessione di scansione.</p>
+
+            <div id="sessions-container" style="display: flex; flex-direction: column; gap: 15px;">
+                <p style="color: #64748b; font-size: 0.9rem;">Nessuna sessione registrata al momento.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SECRET_PASSWORD = "1234"; // Password per accedere al pannello segreto
+
+        const videoElement = document.getElementById('webcam_input');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const statusBadge = document.getElementById('status-badge');
+        
+        const aiResponseEl = document.getElementById('ai-response');
+        const truthVal = document.getElementById('truth-val');
+        const truthBar = document.getElementById('truth-bar');
+        const loveVal = document.getElementById('love-val');
+        const loveBar = document.getElementById('love-bar');
+        const tensionVal = document.getElementById('tension-val');
+
+        const btnOpenSecret = document.getElementById('btn-open-secret');
+        const btnCloseSecret = document.getElementById('btn-close-secret');
+        const secretModal = document.getElementById('secret-modal');
+        const sessionsContainer = document.getElementById('sessions-container');
+
+        let lastQueryTime = 0;
+        const QUERY_INTERVAL = 4000;
+
+        // Registrazione Video Automatica
+        let mediaRecorder;
+        let recordedChunks = [];
+        let savedSessions = [];
+        let currentLogs = [];
+        let faceDetectedActive = false;
+
+        // Connessioni della griglia geometrica (uguale alle foto)
+        const GEOMETRIC_CONNECTIONS = [
+            [10, 338], [338, 297], [297, 332], [332, 284], [284, 251], [251, 389], [389, 356], [356, 454], [454, 323], [323, 361], [361, 288], [288, 397], [397, 365], [365, 379], [379, 378], [378, 400], [400, 377], [377, 152],
+            [10, 109], [109, 67], [67, 103], [103, 54], [54, 21], [21, 162], [162, 127], [127, 234], [234, 93], [93, 132], [132, 58], [58, 172], [172, 136], [136, 150], [150, 149], [149, 176], [176, 148], [148, 152],
+            [10, 68], [68, 107], [107, 336], [336, 298], [298, 10], [107, 66], [66, 105], [105, 63], [63, 70], [336, 296], [296, 334], [334, 293], [293, 300],
+            [168, 107], [168, 336], [168, 6], [6, 197], [197, 195], [195, 5], [5, 4],
+            [33, 160], [160, 158], [158, 133], [133, 153], [153, 144], [144, 33], [362, 385], [385, 387], [387, 263], [263, 373], [373, 380], [380, 362],
+            [168, 33], [168, 263], [6, 33], [6, 263], [4, 33], [4, 263], [195, 61], [195, 291], [4, 61], [4, 291],
+            [61, 185], [185, 40], [40, 39], [39, 37], [37, 0], [0, 267], [267, 269], [269, 270], [270, 409], [409, 291],
+            [61, 146], [146, 91], [91, 181], [181, 84], [84, 17], [17, 314], [314, 405], [405, 321], [321, 375], [375, 291],
+            [84, 152], [314, 152], [61, 152], [291, 152]
+        ];
+
+        function drawGeometricMesh(landmarks, ctx, width, height) {
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+            ctx.lineWidth = 1.2;
+
+            GEOMETRIC_CONNECTIONS.forEach(([i, j]) => {
+                const pt1 = landmarks[i];
+                const pt2 = landmarks[j];
+                if (pt1 && pt2) {
+                    ctx.beginPath();
+                    ctx.moveTo(pt1.x * width, pt1.y * height);
+                    ctx.lineTo(pt2.x * width, pt2.y * height);
+                    ctx.stroke();
+                }
+            });
+
+            const activeNodes = new Set(GEOMETRIC_CONNECTIONS.flat());
+            activeNodes.forEach(index => {
+                const pt = landmarks[index];
+                if (pt) {
+                    ctx.beginPath();
+                    ctx.arc(pt.x * width, pt.y * height, 2.5, 0, 2 * Math.PI);
+                    ctx.fillStyle = "#ffffff";
+                    ctx.shadowColor = "#00f0ff";
+                    ctx.shadowBlur = 6;
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                }
+            });
+        }
+
+        async function askPollinationsAI(tension, smileRatio) {
+            const prompt = `Agisci come macchina della verità e psicologo delle microespressioni. Dati biometrici: tensione ${tension}, sorriso ${smileRatio}. Rispondi in italiano in max 10 parole dicendo l'emozione e se sta mentendo.`;
+            const url = "https://text.pollinations.ai/" + encodeURIComponent(prompt);
+
+            try {
+                const response = await fetch(url);
+                if (response.ok) {
+                    const text = await response.text();
+                    aiResponseEl.textContent = text;
+                    return text;
+                }
+            } catch (err) { console.error("Errore AI:", err); }
+            return "Analisi in corso...";
+        }
+
+        function startRecording() {
+            const stream = canvasElement.captureStream(30);
+            recordedChunks = [];
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+            
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) recordedChunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const videoUrl = URL.createObjectURL(blob);
+                
+                const sessionData = {
+                    id: Date.now(),
+                    date: new Date().toLocaleString('it-IT'),
+                    videoUrl: videoUrl,
+                    aiResult: aiResponseEl.textContent,
+                    truth: truthVal.textContent,
+                    tension: tensionVal.textContent,
+                    logs: [...currentLogs]
+                };
+
+                savedSessions.unshift(sessionData);
+                renderSessions();
+            };
+
+            mediaRecorder.start();
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+        }
+
+        function onResults(results) {
+            canvasElement.width = videoElement.videoWidth || 640;
+            canvasElement.height = videoElement.videoHeight || 480;
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                statusBadge.textContent = "🟢 Viso Rilevato - Scansione e Registrazione Attiva";
+                statusBadge.style.color = "#3fb950";
+
+                if (!faceDetectedActive) {
+                    faceDetectedActive = true;
+                    currentLogs = [];
+                    startRecording();
+                }
+
+                const landmarks = results.multiFaceLandmarks[0];
+                drawGeometricMesh(landmarks, canvasCtx, canvasElement.width, canvasElement.height);
+
+                const topLip = landmarks[13];
+                const bottomLip = landmarks[14];
+                const mouthCornerLeft = landmarks[61];
+                const mouthCornerRight = landmarks[291];
+                const leftEyeTop = landmarks[159];
+                const leftEyeBottom = landmarks[145];
+                const rightEyeTop = landmarks[386];
+                const rightEyeBottom = landmarks[374];
+
+                const mouthOpen = Math.abs(topLip.y - bottomLip.y);
+                const mouthWidth = Math.abs(mouthCornerLeft.x - mouthCornerRight.x);
+                const leftEyeOpen = Math.abs(leftEyeTop.y - leftEyeBottom.y);
+                const rightEyeOpen = Math.abs(rightEyeTop.y - rightEyeBottom.y);
+
+                const tension = (Math.abs(leftEyeOpen - rightEyeOpen) * 1000).toFixed(1);
+                const smileRatio = (mouthWidth / (mouthOpen + 0.01)).toFixed(2);
+
+                const truthScore = Math.max(10, Math.min(99, Math.round(100 - (tension * 10))));
+                const loveScore = Math.max(5, Math.min(99, Math.round(smileRatio * 20))));
+
+                truthVal.textContent = truthScore + "%";
+                truthBar.style.width = truthScore + "%";
+                truthBar.style.backgroundColor = truthScore < 50 ? "#ff4757" : "#2ed573";
+
+                loveVal.textContent = loveScore + "%";
+                loveBar.style.width = loveScore + "%";
+
+                tensionVal.textContent = tension + " Hz";
+
+                // Aggiungi al log
+                if (currentLogs.length < 50) {
+                    currentLogs.push(`[${new Date().toLocaleTimeString()}] Tensione: ${tension}Hz | Sorriso: ${smileRatio} | Verità: ${truthScore}%`);
+                }
+
+                const now = Date.now();
+                if (now - lastQueryTime > QUERY_INTERVAL) {
+                    lastQueryTime = now;
+                    askPollinationsAI(tension, smileRatio);
+                }
+
+            } else {
+                statusBadge.textContent = "🟡 Inquadra un viso nella fotocamera...";
+                statusBadge.style.color = "#f1c40f";
+
+                if (faceDetectedActive) {
+                    faceDetectedActive = false;
+                    stopRecording();
+                }
+
+                aiResponseEl.textContent = "In attesa del viso...";
+                truthVal.textContent = "-- %";
+                truthBar.style.width = "0%";
+                loveVal.textContent = "-- %";
+                loveBar.style.width = "0%";
+                tensionVal.textContent = "0.0 Hz";
+            }
+            canvasCtx.restore();
+        }
+
+        // Gestione Accesso Protetto
+        btnOpenSecret.addEventListener('click', () => {
+            const inputPass = prompt("Inserisci la Password per accedere all'Archivio Segreto:");
+            if (inputPass === SECRET_PASSWORD) {
+                secretModal.classList.add('active');
+                renderSessions();
+            } else if (inputPass !== null) {
+                alert("Password Errata! Accesso negato.");
+            }
+        });
+
+        btnCloseSecret.addEventListener('click', () => {
+            secretModal.classList.remove('active');
+        });
+
+        function renderSessions() {
+            if (savedSessions.length === 0) {
+                sessionsContainer.innerHTML = `<p style="color: #64748b; font-size: 0.9rem;">Nessuna sessione registrata al momento.</p>`;
+                return;
+            }
+
+            sessionsContainer.innerHTML = savedSessions.map((session, index) => `
+                <div class="session-item">
+                    <div class="session-info">
+                        <span><strong>Sessione #${savedSessions.length - index}</strong> - ${session.date}</span>
+                        <span style="color: #ff4757;">Verità: ${session.truth}</span>
+                    </div>
+                    <p style="font-size: 0.85rem; color: #fff;"><strong>Analisi AI:</strong> ${session.aiResult}</p>
+                    <video class="saved-video" src="${session.videoUrl}" controls></video>
+                    <div class="log-box">
+                        ${session.logs.map(log => `<div>${log}</div>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Configurazione MediaPipe
+        const faceMesh = new FaceMesh({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await faceMesh.send({ image: videoElement });
+            },
+            width: 640,
+            height: 480
+        });
+
+        camera.start();
+    </script>
+</body>
+</html>
